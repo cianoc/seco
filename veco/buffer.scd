@@ -1,3 +1,10 @@
+///////////////////////////
+// open_project iter on nodes by node_unames to create and .load_data each node
+// when the view (launchpad:clip) try to get a clip, it is created if don't exist in node.get_clip_by_index
+//
+//
+///////////////////////////
+
 ~execute_till_special_end = { arg path, skip_first_assign=false;
 	var res = path;
 	path.debug("Try loading buffer file");
@@ -8,9 +15,9 @@
 		File.use(res, "r", { arg file;
 			code = file.readAllString;
 		});
-		end = code.find("// END");
+		end = code.find("\n// END");
 		if(end.notNil) {
-			code = code.keep(end);
+			code = code.keep(end+1);
 		};
 
 		if(skip_first_assign) {
@@ -32,6 +39,13 @@
 	} {
 		path.debug("execute_till_special_end: File don't exists");
 	}
+};
+
+~strip_end_slash = { arg path;
+	if(path.last == $/) {
+		path = path.drop(-1)
+	};
+	path;
 };
 
 ~class_veco = (
@@ -76,7 +90,9 @@
 	},
 
 	puname_to_uname: { arg self, uname;
-		if(self.prefixed_uname_mode) {
+		var res;
+		var inuname = uname;
+		res = if(self.prefixed_uname_mode) {
 			uname = uname.asString;
 			if(uname.beginsWith(self.project_name)) {
 				uname = uname.replace(self.project_name++ "-", "")
@@ -84,7 +100,9 @@
 			uname.asSymbol;
 		} {
 			uname;
-		}
+		};
+		//[inuname, res].debug("puname_to_uname");
+		res;
 	},
 
 	index_to_uname: { arg self, idx;
@@ -105,13 +123,20 @@
 	},
 
 	open_project: { arg self, path;
+		var user_path;
+		var project_name;
 		s.boot;
 		~initialize_jack.();
 		//self.project_destructor;
 
 		self.project_path = path.standardizePath;
-		self.project_name = PathName(self.project_path).fileName;
-		//self.project_name = self.project_name.asSymbol;
+		self.project_path = ~strip_end_slash.(self.project_path);
+
+		user_path = ~strip_end_slash.(Veco.user_path);
+		project_name = PathName(self.project_path).asRelativePath(user_path);
+		project_name = project_name.replace("/", "");
+		self.project_name = project_name;
+
 		~veco_project_path = self.project_path;
 		self.project_path.debug("class_veco_buffer_manager.open_project: path");
 		self.nodes = IdentityDictionary.new;
@@ -119,8 +144,11 @@
 			uname = self.uname_to_puname(uname);
 			uname.debug("open_project: create node");
 			// create buffers objects and load saved data (mainly stepseq and amp)
+			"hh1".debug;
 			self.nodes[uname] = ~class_node_buffer.new(self, uname);
+			"hh2".debug;
 			self.nodes[uname].load_data;
+			"hh3".debug;
 		};
 		"init project".debug("===");
 		self.init_project; // load init files and execute node buffers
@@ -133,19 +161,69 @@
 
 	get_node_by_index: { arg self, idx;
 		//[idx].debug("get_node_by_index");
-		self.nodes[self.index_to_uname(idx)]
+		var res;
+		if(idx < self.msize.x) {
+			res = self.nodes[self.index_to_uname(idx)]
+			//[idx,res.uname].debug("get_node_by_index: home board");
+		} {
+			// other project mode
+			var target_project;
+			target_project = self.pane_target_project;
+			if(target_project.notNil and:{ target_project.class == Environment }) {
+				res = target_project[\veco].get_node_by_index(idx - self.msize.y);
+				[idx,res.uname, target_project[\veco].project_name].debug("get_node_by_index: alien board");
+			};
+			res;
+		};
+		res;
+	},
+
+	split_puname: { arg self, in;
+		var pnode, clip;
+		var project, node;
+		// format of a puname: project-node.clip
+		in.debug("split_puname");
+		in = in.asString;
+		#pnode, clip = in.split($.);
+		#project, node = in.split($-);
+		[pnode, clip, project, node].debug("[pnode, clip, project, node]");
+		if(node.isNil) {
+			node = project;
+			project = nil;
+		};
+		(
+			is_puname: project.notNil,
+			project: project.asString,
+			node: node.asSymbol,
+			project_node: pnode.asSymbol,
+			clip: clip,
+		).debug("split_puname: suname");
 	},
 
 	get_node_by_uname: { arg self, uname;
-		var res;
-		if(self.prefixed_uname_mode) {
-			if(self.nodes[uname].isNil) {
-				uname = self.uname_to_puname(uname);
-			};
-		};
-		res = self.nodes[uname];
+		// this parent class is used by no one and this function is redefined, stop using it
 
-		res;
+		//var res;
+		//var project_name;
+		//var suname;
+
+		//suname = self.split_puname(uname);
+		//if(
+		//	suname.is_puname and: {
+		//		suname.project != self.project_name and: {
+		//			suname.project == self.pane_target_project[\veco].project_name
+		//		}
+		//	}
+		//) {
+		//	res = self.pane_target_project[\veco].get_node_by_uname(uname)
+		//} {
+		//	if(suname.is_puname.not) {
+		//		uname = self.uname_to_puname(uname);
+		//	};
+		//	res = self.nodes[uname];
+		//};
+
+		//res;
 	},
 
 	open_buffer: { arg self, idx, name;
@@ -266,6 +344,7 @@
 
 		self.pane_rect = Rect(100,100,100,100);
 		self.pane_offset = Point(0,32);
+		self.pane_target_project = nil;
 
 		self.mode_immortal_mixers = true;
 		self.mixers_main_fadetime = 0.5;
@@ -338,25 +417,65 @@
 	},
 
 	get_node_by_uname: { arg self, uname;
+		// get node by uname or index, get clip by clip_uname or point
 		var res;
-		//uname.debug("veco.get_node_by_uname: uname");
-		if(self.prefixed_uname_mode) {
-			if(self.nodes[uname].isNil) {
-				var puname;
-				puname = self.uname_to_puname(uname);
-				//puname.debug("veco.get_node_by_uname: puname");
-				res = self.nodes[puname];
-				//self.nodes.keys.debug("nodes");
-				//res.debug("res");
-				res;
-			} {
-				res = self.nodes[uname];
-			};
-		} {
-			res = self.nodes[uname];
+		uname.debug("veco.get_node_by_uname: uname");
+		if(uname.isNumber) {
+			res = self.get_node_by_index(uname);
+		};
+		if(uname.class == Point) {
+			res = self.get_node_by_index(uname.x).get_clip_by_index(uname.y);
 		};
 		if(res.isNil) {
-			res = self.get_nodeclip_by_uname(uname)
+			if(self.prefixed_uname_mode) {
+				var project_name;
+				var suname;
+
+				suname = self.split_puname(uname);
+				suname.debug("suname");
+				[suname.project.asCompileString, self.project_name.asCompileString].debug("supro, selpro");
+				self.pane_target_project.class.debug("pantarpro");
+				if(self.pane_target_project.notNil and: {self.pane_target_project[\veco].notNil}) {
+					self.pane_target_project[\veco].project_name.asCompileString.debug("pataproname");
+				};
+				if(
+					self.pane_target_project.notNil and: {
+						suname.is_puname and: {
+							suname.project != self.project_name and: {
+								suname.project == self.pane_target_project[\veco].project_name
+							}
+						}
+					}
+				) {
+					suname.debug("suname2");
+					res = self.pane_target_project[\veco].get_node_by_uname(uname);
+					res.class.debug("res0");
+				} {
+					if(suname.is_puname.not) {
+						suname = self.split_puname(self.uname_to_puname(uname));
+					};
+					uname.debug("uname3");
+					suname.debug("suname3");
+					self.nodes.keys.asArray.sort.debug("nodes");
+					res = self.nodes[suname.project_node];
+					res.class.debug("res1");
+					if(res.notNil and: {suname.clip.notNil}) {
+						res = res.get_clip_by_index(suname.clip.asInteger - 1);
+						res.class.debug("res2");
+					};
+				};
+
+			} {
+				res = self.nodes[uname];
+				res.class.debug("resX");
+			};
+		};
+		res.class.debug("mais hein????????");
+		if(res.isNil) {
+			uname.debug("Error: uname not found");
+			//"uname not found".throw;
+			"wtf".debug;
+			res = nil;
 		};
 		res;
 	},
@@ -364,14 +483,13 @@
 	get_nodeclip_by_uname: { arg self, uname;
 		var node_uname,idx, node; 
 		#node_uname, idx = uname.asString.split($.);
+		node_uname.debug("get_node_by_uname: node_uname");
 		if(idx.isNil) {
-			uname.debug("Error: uname is not in a nodeclip uname format");
-			nil.fuck;
+			~uname.debug("Error: uname is not in a nodeclip uname format").postln;
+			"uname is not in a nodeclip uname format".throw;
+			nil;
 		} {
-			idx = idx.asInteger-1;
-			node_uname = node_uname.asSymbol;
-			node = self.get_node_by_uname(node_uname);
-			node.get_clip_by_index(idx);
+			self.get_node_by_uname(uname);
 		}
 	},
 
@@ -421,7 +539,34 @@
 	//},
 
 	copy_buffer: { arg self, from_path, to_path;
+		// used in load_data_from_clip
 		File.copy(from_path, to_path);
+		[from_path,to_path].debug("copying buffer file");
+		self.disable_tags(to_path);
+	},
+
+	disable_tags_in_string: { arg self, code;
+		code.replace("\n// TAGS:", "\n// xTAGS:");
+	},
+
+	disable_tags: { arg self, path;
+		if(File.exists(path)) {
+			var code;
+			File.use(path, "r", { arg file;
+				//"bed".debug;
+				code = file.readAllString;
+				//"afd".debug;
+			});
+			code = self.disable_tags_in_string(code);
+			File.use(path, "w", { arg file;
+				//"bed".debug;
+				file.write(code);
+				//"afd".debug;
+			});
+		} {
+			( "ERROR: file not found: "++ path ).postln;
+		};
+		
 	},
 
 );
@@ -515,6 +660,7 @@
 
 ~class_node_buffer = (
 	parent: ~class_code_buffer,
+	eventclass: "class_node_buffer",
 
 	envir_keys: [\name],
 
@@ -554,6 +700,21 @@
 		}
 	},
 
+	clip_response_mode: { arg self;
+		if(self.val_clip_response_mode.isNil) {
+			self.main.clip_response_mode
+		} {
+			self.val_clip_response_mode
+		}
+	},
+
+	clip_response_mode_: { arg self, val;
+		if(self.val_clip_response_mode != val) {
+			self.val_clip_response_mode = val;
+			//self.save_data; // not really needed since nodes are executed at project start
+		} 
+	},
+
 	master_bus: { arg self;
 		self.main.master_bus;
 	},
@@ -588,6 +749,11 @@
 	//},
 
 	open_in_vim: { arg self;
+		// compat
+		self.open_in_editor;
+	},
+
+	open_in_editor: { arg self;
 		var uname = self.uname;
 		self.define_variables;
 		self.main.open_file_in_editor(self.path);
@@ -653,6 +819,7 @@
 			new_code_header = "~name = %;".format(self.uname.asCompileString);
 			code = ([new_code_header] ++ code_body).join($\n);
 			//self.stepseq = clip.stepseq.deepCopy;
+			code = self.main.disable_tags_in_string(code);
 			File.use(self.path, "w", { arg file;
 				file.write(code);
 			});
@@ -666,15 +833,18 @@
 		if(self.is_present) {
 			File.use(self.data_path, "w") { arg file;
 				var code;
-				code = "Veco.save(%).amp_level = %;\n".format(self.uname.asCompileString, self.data.amp_level);
+				code = "Veco.save(%).amp_level = %;\n".format(self.bare_uname.asCompileString, self.data.amp_level);
 				file.write(code);
 			};
 		}
 	},
 
 	load_data: { arg self;
+		self.data_path.debug("load_data: data_path");
 		if(self.is_present) {
+			self.data_path.debug("load_data: now load");
 			self.data_path.load;
+			self.data_path.debug("load_data: end load");
 		};
 	
 	},
@@ -807,14 +977,32 @@
 
 	get_clip_by_index: { arg self, idx, create=true;
 		//if(self.clips[idx].isNil and: create) {
-		if(self.clips[idx].isNil) {
+
+		if(self.clips[idx].isNil or: { self.clips[idx].eventclass == \class_empty_clip }) {
 			var uname  = self.uname;
 			var cuname = "%.%".format(uname, idx+1).asSymbol;
 			var clip;
-			clip = ~class_node_clip.new(self.main, cuname, self);
+			if(idx < self.main.msize.y) {
+				clip = ~class_node_clip.new(self.main, cuname, self);
+			} {
+				var proj;
+				var ppath;
+				var target_uname ;
+				var target_cuname;
+				proj = self.main.pane_target_project;
+				if(proj.notNil and: { proj.class == Environment }) {
+					ppath = proj[\veco].project_path;
+					target_uname = PathName(ppath+/+"").asRelativePath((Veco.user_path+/+"").drop(-1)).drop(-1);
+					target_cuname = "%.%".format(self.bare_uname, idx+1 - self.main.pane_offset.y).asSymbol;
+					clip = ~class_shortcut_clip.new(self.main, cuname, self, ppath, target_cuname);
+				} {
+					clip = ~class_empty_clip.new(self.main, cuname,self);
+				}
+			};
 			self.clips[idx] = clip;
 			clip.load_data;
 		};
+		//[idx, create, self.clips[idx].path].debug("class_node_buffer.get_clip_by_index");
 		self.clips[idx];
 	},
 
@@ -920,8 +1108,10 @@
 		});
 		self.add_stop_node_hook(\mixer, { 
 			if(self.main.mode_immortal_mixers == false) {
-				Ndef(name+++\mixer).end(Ndef(name+++\mixer).fadeTime+self.main.mixers_main_fadetime)
-			}
+				var fadetime;
+				fadetime = Ndef(name+++\mixer).getHalo(\fadeOut) ?? Ndef(name+++\mixer).fadeTime;
+				Ndef(name+++\mixer).end(fadetime + self.main.mixers_main_fadetime)
+			};
 		});
 		self.has_mixer = true;
 
@@ -1000,11 +1190,12 @@
 	},
 
 	set_amp_level: { arg self, val;
+		self.set_amp_level_hook(val);
 		self.data.amp_level = val;
 	},
 
 	set_norm_amp_level: { arg self, val;
-		self.data.amp_level = ~amp_level_spec.map(val);
+		self.set_amp_level( ~amp_level_spec.map(val));
 	},
 
 	//// volume (Ndef)
@@ -1076,11 +1267,13 @@
 
 ~class_node_clip = (
 	parent: ~class_code_buffer,
+	eventclass: "class_node_clip",
 
 	new: { arg self, main, uname, parent;
 		self = ~class_code_buffer[\new].(self, main, uname);
 	
 		self.parent_buffer = {parent};
+		self.lib = ();
 	
 		self;
 	},
@@ -1106,7 +1299,7 @@
 
 	response_off: { arg self;
 		self.is_pressed = false;
-		self.response_off_hook;
+		self.response_off_hook(self.parent_buffer.uname, self.uname, self.get_index);
 	},
 
 	data: { arg self;
@@ -1120,7 +1313,7 @@
 
 	stepseq: [1,1,0,0, 0,0,0,0],
 	stepseq_size: nil,
-	envir_keys: [\name, \namex, \index],
+	envir_keys: [\name, \namex, \index, \target_name, \target_namex, \target_index],
 
 	set_step: { arg self, idx, val;
 		self.stepseq[idx] = val;
@@ -1131,14 +1324,18 @@
 		if(self.is_present) {
 			File.use(self.data_path, "w") { arg file;
 				var code;
-				code = "Veco.save(%).stepseq = %;\n".format(self.uname.asCompileString, self.stepseq.asCompileString);
+				code = "Veco.save(%).stepseq = %;\n".format(self.bare_uname.asCompileString, self.stepseq.asCompileString);
+				//if(self.response_mode != \toggle) {
+				if(self.val_response_mode.notNil) {
+					code = code ++ "Veco.save(%).response_mode = %;\n"
+						.format(self.bare_uname.asCompileString, self.response_mode.asCompileString);
+				};
 				file.write(code);
 			};
 		}
 	},
 
 	load_data: { arg self;
-		// no! now load in clip.new
 		//// not called by anyone, open project just run data/*.scd files
 		if(self.is_present) {
 			self.data_path.load;
@@ -1160,11 +1357,12 @@
 		if(self.is_present.not) {
 			var code;
 			self.stepseq = clip.stepseq.deepCopy;
-			File.copy(clip.path, self.path);
+			self.val_response_mode = clip.val_response_mode;
+			self.main.copy_buffer(clip.path, self.path);
 
 			// score
 
-			clip.save_data;
+			clip.save_data; // FIXME: this save can lose data if the source clip has not loaded data correctly and then is copied
 			Sdef.load_data_from_clip(clip, self);
 
 
@@ -1174,8 +1372,11 @@
 
 	get_abspos: { arg self;
 		var x, y;
+		debug("node clip: begin get_abspos");
 		x = self.main.uname_to_index(self.parent_buffer.uname);
 		y = self.parent_buffer.clips.indexOf(self);
+
+		[x,y].debug("node clip: get_abspos");
 		Point(x,y)
 	},
 
@@ -1206,16 +1407,23 @@
 		res = self.execute;
 	},
 
+	stop_node: { arg self, use_quant, stop_func;
+		self.parent_buffer.stop_node(use_quant, stop_func);
+	},
+
 	response_mode: { arg self;
 		if(self.val_response_mode.isNil) {
-			self.main.clip_response_mode
+			self.parent_buffer.clip_response_mode
 		} {
 			self.val_response_mode
 		}
 	},
 
 	response_mode_: { arg self, val;
-		self.val_response_mode = val;
+		if(self.val_response_mode != val) {
+			self.val_response_mode = val;
+			self.save_data;
+		} 
 	},
 
 	response_unselect: { arg self;
@@ -1223,7 +1431,7 @@
 		self.response_unselect_hook;
 	},
 
-	response_on_play: { arg self;
+	activate_clip: { arg self;
 		self.parent_buffer.old_active_clip_index = self.parent_buffer.active_clip_index;
 		self.parent_buffer.active_clip_index = self.parent_buffer.clips.indexOf(self);
 		self.parent_buffer.active_clip_index.debug("class_node_clip.response_on: active_clip_index");
@@ -1232,6 +1440,10 @@
 				self.parent_buffer.get_clip_by_index(self.parent_buffer.old_active_clip_index).response_unselect;
 			}
 		};
+	},
+
+	response_on_play: { arg self;
+		self.activate_clip;
 		self.play_node;
 	},
 
@@ -1247,6 +1459,8 @@
 		};
 	},
 
+	stop_hook: {},
+
 	response_on: { arg self, stop_func;
 		[self.response_mode].debug("RESPO?SE ONN");
 		switch(self.response_mode,
@@ -1259,6 +1473,26 @@
 			\exec, {
 				self.is_pressed = true;
 				self.execute;
+			},
+			\execchoose, {
+				self.is_pressed = true;
+				self.activate_clip;
+				self.execute;
+			},
+			\exectoggle, {
+				self.is_pressed = true;
+				self.execute;
+
+				// commented because doing it in the clip file to be able to exec without using launchpad
+				//if(self.exectoggle_state == 1) {
+				//	// is on, put off
+				//	self.exectoggle_state = 0;
+				//	self.stop_hook(self.parent_buffer.uname, self.uname, self.get_index);
+				//} {
+				//	// is off, put on
+				//	self.exectoggle_state = 1;
+				//	self.execute;
+				//}
 			}
 		)
 	},
@@ -1276,6 +1510,9 @@
 		~name = self.parent_buffer.get_name;
 		~namex = self.uname;
 		~index = idx; 
+		~target_name = ~name;
+		~target_namex = ~target_namex;
+		~target_index = ~target_index; 
 	},
 
 	envir_do: { arg self, fun;
@@ -1291,6 +1528,11 @@
 	},
 
 	open_in_vim: { arg self;
+		// compat
+		self.open_in_editor;
+	},
+
+	open_in_editor: { arg self;
 		var uname = self.uname;
 		self.define_variables;
 		self.main.open_file_in_editor(self.path);
@@ -1330,6 +1572,134 @@
 			}
 		};
 	},
+);
+
+////////////////////// shortcut
+// pretend to be part of a project but instead read and write a file in another project
+
+~class_shortcut_node = (
+	parent: ~class_node_buffer,
+
+	new: { arg self, main, uname, target_project_path, target_uname;
+		self = ~class_node_buffer[\new].(self, main, uname);
+	
+		self.target_project_path = target_project_path;
+		self.target_uname = target_uname;
+	
+		self;
+	},
+
+	save_data: { arg self;
+		"class_shortcut_node: no ! dont save data!".debug;
+	},
+
+	path: { arg self;
+		(self.target_project_path+/+( self.target_uname++".scd" )).asString;
+	},
+
+	data_path: { arg self;
+		var path = ( self.target_project_path +/+ "data" +/+ (self.target_uname++".scd") ).asString;
+		path;
+	},
+
+	load_data: { arg self;
+		// called manually
+		Veco.save_hook = {
+			self.data;
+		};
+		self.data_path.debug("node: load_data: data_path");
+		self.data_path.load;
+		Veco.save_hook = nil;
+	},
+
+);
+
+~class_shortcut_clip = (
+	parent: ~class_node_clip,
+
+	new: { arg self, main, uname, parent, target_project_path, target_uname;
+		self = ~class_node_clip[\new].(self, main, uname, parent);
+	
+		self.target_project_path = target_project_path;
+		self.target_uname = target_uname;
+	
+		self;
+	},
+
+	define_variables: { arg self;
+		// TODO: change it
+		var idx = self.get_index;
+		self.variables = ();
+		self.envir_keys.do { arg key;
+			self.variables[key] = currentEnvironment[key];
+		};
+		~name = self.parent_buffer.get_name;
+		~namex = self.uname;
+		~index = idx; 
+		~target_name = ~name;
+		~target_namex = ~target_namex;
+		~target_index = ~target_index; 
+	},
+
+	save_data: { arg self;
+		"class_shortcut_clip: no ! dont save data!".debug;
+	},
+
+	path: { arg self;
+		(self.target_project_path+/+( self.target_uname++".scd" )).asString;
+	},
+
+	data_path: { arg self;
+		var path = ( self.target_project_path +/+ "data" +/+ (self.target_uname++".scd") ).asString;
+		path;
+	},
+
+	load_data: { arg self;
+		// called manually
+		Veco.save_hook = {
+			self.data;
+		};
+		self.data_path.debug("load_data: data_path");
+		self.data_path.load;
+		Veco.save_hook = nil;
+	},
+	
+);
+
+~class_empty_clip = (
+	parent: ~class_node_clip,
+	eventclass: \class_empty_clip,
+
+	// RISK: can't replace with real clip since it already exists
+	new: { arg self, main, uname, parent, target_project_path, target_uname;
+		self = ~class_node_clip[\new].(self, main, uname, parent);
+	
+	
+		self;
+	},
+
+	save_data: { arg self;
+		"class_empty_clip: no ! dont save data!".debug;
+	},
+	response_off: {},
+
+	load_data_from_clip: {},
+
+	is_present: {false},
+	is_active: {false},
+	execute: {false},
+
+	path: { arg self;
+		"emptyxx";
+	},
+
+	data_path: { arg self;
+		"dataemptyxx"
+	},
+
+	load_data: { arg self;
+	},
+	
 );
 
 /////////////////////////////// codepads

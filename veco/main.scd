@@ -1,6 +1,19 @@
-topEnvironment.push;
+topEnvironment.push; // this must be always executed in the toplevel Environment (FIXME: break current project when reinitilized)
 
-// deprecated, use Veco.extension_path and Veco.user_path
+////////////////////////////
+// - used by Veco class to load projects
+// - each project sit in its own environment, class_project_manager always manage the current project in the current environment
+// - if you load a project when there is already a project loaded in the environment, the old one is destructed (free resources)
+// - a project is a class_veco_sceneset (~veco, Veco.main) and a class_score_manager (~score_storage)
+// - open_project in fact use ~veco.open_project which load all node (1.scd, etc) file then init file (init.scd)
+// - when the view (launchpad) request a clip, it ask the node which create it from the associated file (1.1.scd) on demand
+// 
+// - class_project_manager is a kind of project slot handler that free previous project when a new one is loaded
+// - switching projects is just replacing the launchpad midi responder with one of a different project and pushing the project env
+///////////////////////////
+
+
+// following variables deprecated, use Veco.extension_path and Veco.user_path
 //~veco_dir_path = Platform.userExtensionDir +/+ "seco/seco/veco";
 //~veco_code_path = "~/code/sc/seco/vlive/".standardizePath;
 
@@ -96,17 +109,20 @@ BusDef(\zero, \audio);
 		~score_storage = ~class_score_manager.new;
 	},
 
-	open_project: { arg self, path;
+	open_project: { arg self, path, activate=true;
 		path.debug("=========================######### Start loading project");
 		self.reset_board;
 		~veco.open_project(path); 
 
-		~veco.clip.activate;
+		if(activate != false) {
+			~veco.clip.activate;
+		};
 		path.debug("=========================######### End loading project");
 		
 	},
 
 	open_side_project: { arg self, path;
+		// NOT USED!
 		self.reset_side_slot(path);
 		self.side_slot(path).open_project(path);
 		if(self.projects[path].notNil) {
